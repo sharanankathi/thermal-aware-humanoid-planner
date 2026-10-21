@@ -1,0 +1,41 @@
+# Joint actuator library. All motor values from ONE public datasheet:
+#   Kollmorgen TBM Frameless Motor Selection Guide, KM_SG_00218_RevE_EN (2017),
+#   "TBM(S) 60 Series Performance Data", winding variant A (48 V).
+#   https://www.kollmorgen.com/sites/default/files/Kollmorgen_TBM_Frameless_Motor_Selection_Guide.pdf
+# Datasheet conditions: 25 C ambient; "hot" constants at 155 C winding; TPR measured with the
+# motor housed on a 3.5" x 3.5" x 0.25" heat sink; 6-step drive, currents in Adc, R line-to-line.
+#
+# Sizing rule (baseline robot): every arm joint uses TBM(S)-6013-A, with the gear ratio chosen so
+#   motor peak torque x N x eta  ~=  Apollo's published joint torque limit (MuJoCo Menagerie XML).
+#   Gives a 3.4:1 peak-to-continuous ratio, typical of humanoid joint actuators.
+# 6025-A and 6051-A (same datasheet, same frame) at the same ratios form the motor-size design study.
+
+common:
+  alpha_cu_per_C: 0.00393     # copper resistance tempco               [physics constant]
+  T_rated_winding_C: 155.0    #                                        [datasheet]
+  T_ambient_rated_C: 25.0     #                                        [datasheet]
+  T_limit_C: 140.0            # protective stop, 15 C below 155 C rating
+  gear_efficiency: 0.80       # [ASSUMPTION] verify against Harmonic Drive CSG/CSF catalog
+  thermal_split:              # [PROVISIONAL] until the ANSYS housing model (scaled by motor mass)
+    R_wh_fraction: 0.35
+    winding_node_mass_fraction: 0.60   # of motor (stator+rotor) mass
+    winding_cp_J_per_kgK: 450.0
+    housing_al_kg_per_motor_kg: 1.05   # aluminum housing, 0.60 kg for the 0.571 kg motor
+    housing_al_cp: 900.0
+    gear_steel_kg_per_motor_kg: 0.70   # strain-wave gear, 0.40 kg for the 0.571 kg motor
+    gear_steel_cp: 460.0
+
+motors:   # all [datasheet]; Tp = peak stall torque @ 25 C winding
+  TBM6013A: {Tc: 0.415, Ic: 5.51, Tp: 1.39, Kt_cold: 0.087, Kt_hot: 0.079, R25: 0.804, TPR: 3.55, mass: 0.221, gear_ratio: 100}
+  TBM6025A: {Tc: 0.727, Ic: 5.58, Tp: 2.82, Kt_cold: 0.148, Kt_hot: 0.135, R25: 0.890, TPR: 3.13, mass: 0.398, gear_ratio: 100}
+  TBM6051A: {Tc: 1.08,  Ic: 6.54, Tp: 5.08, Kt_cold: 0.193, Kt_hot: 0.176, R25: 0.763, TPR: 2.72, mass: 0.571, gear_ratio: 100}
+
+# joint: [motor, gear ratio, Apollo limit Nm]   1.39 Nm x N x 0.8 vs limit
+joint_actuator:
+  shoulder_aa: [TBM6013A, 70, 78.0]     # 77.8 Nm
+  shoulder_ie: [TBM6013A, 60, 67.0]     # 66.7 Nm
+  shoulder_fe: [TBM6013A, 100, 114.0]   # 111 Nm
+  elbow_fe:    [TBM6013A, 100, 114.0]   # 111 Nm
+  wrist_roll:  [TBM6013A, 10, 10.6]     # 11.1 Nm
+  wrist_yaw:   [TBM6013A, 30, 34.2]     # 33.4 Nm
+  wrist_pitch: [TBM6013A, 30, 34.2]     # 33.4 Nm

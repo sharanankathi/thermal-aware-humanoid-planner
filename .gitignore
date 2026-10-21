@@ -1,0 +1,8 @@
+__pycache__/
+.pytest_cache/
+.cache/
+*.pyc
+*.log
+figures/frames/
+results/broken_posture_lib/
+.venv/
