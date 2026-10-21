@@ -70,7 +70,7 @@ SCENARIOS = {
 }
 
 
-def box_stream(sc: Scenario, seed: int, n: int = 4000) -> list[Box]:
+def box_stream(sc: Scenario, seed: int, n: int = 6000) -> list[Box]:
     rng = np.random.default_rng(seed)
     places = [j for j, s in enumerate(PLACE_SHELF) if s in sc.shelves]
     picks = list(sc.pick_slots) if sc.pick_slots else list(range(len(PICK_SLOTS)))
@@ -84,6 +84,7 @@ class Plan:
     posture: int      # posture-library index
     pace: float = 1.0
     pause: float = 0.0   # idle seconds after the cycle
+    posture2: int = 0    # right-arm posture when arm == "dual"
 
 
 @dataclass
@@ -120,27 +121,41 @@ def run_shift(lib: CycleLibrary, controller, sc: Scenario, seed: int, params=Non
     controller.reset(th_ctrl, lib, sc, idle)
     t, nbox, energy, stopped, t_stop = 0.0, 0, 0.0, False, np.inf
     peak_T = th.T_w.copy()
-    counts = {"l": 0, "r": 0, "both": 0}
+    counts = {"l": 0, "r": 0, "both": 0, "dual": 0}
     tr_t, tr_T, next_rec = [0.0], [th.T_w.copy()], trace_dt
     peak_ratio = 0.0
     tau_max = lib.robot.tau_max
     cyc_times = []
     events = []
-    for box in boxes:
+    i = 0
+    while i < len(boxes) - 1:
+        box = boxes[i]
         if t >= sc.shift_s:
             break
         if th_ctrl is not th:          # sensor readout: controller sees true temperatures
             th_ctrl.T_w[:], th_ctrl.T_h[:] = th.T_w, th.T_h
+        controller.next_box = boxes[i + 1]
         plan = controller.plan(box, t)
         if record:
             events.append((t, box, plan, th.T_w.copy()))
-        cyc = lib.get(box.pick, box.place, plan.arm, plan.posture, plan.pace)
-        seg = cyc.seg_tau_sq(box.mass)
-        # idle arm sits at stand; replace its torques with the idle values
-        if plan.arm in ("l", "r"):
-            other = slice(7, 14) if plan.arm == "l" else slice(0, 7)
-            seg[:, other] = idle[other]
-        pk = cyc.peak(box.mass)
+        if plan.arm == "dual":
+            # parallel single-arm lifts: left arm carries this box, right arm the next one
+            box2 = boxes[i + 1]
+            cyc = lib.get(box.pick, box.place, "l", plan.posture, plan.pace)
+            cyc2 = lib.get(box2.pick, box2.place, "r", plan.posture2, plan.pace)
+            seg = cyc.seg_tau_sq(box.mass)
+            seg[:, 7:14] = cyc2.seg_tau_sq(box2.mass)[:, 7:14]
+            pk = np.concatenate([cyc.peak(box.mass)[:7], cyc2.peak(box2.mass)[7:]])
+            n_here = 2
+        else:
+            cyc = lib.get(box.pick, box.place, plan.arm, plan.posture, plan.pace)
+            seg = cyc.seg_tau_sq(box.mass)
+            # idle arm sits at stand; replace its torques with the idle values
+            if plan.arm in ("l", "r"):
+                other = slice(7, 14) if plan.arm == "l" else slice(0, 7)
+                seg[:, other] = idle[other]
+            pk = cyc.peak(box.mass)
+            n_here = 1
         peak_ratio = max(peak_ratio, float((pk / tau_max).max()))
         steps = list(zip(cyc.durations, seg))
         if plan.pause > 0:
@@ -159,10 +174,11 @@ def run_shift(lib: CycleLibrary, controller, sc: Scenario, seed: int, params=Non
                 break
         if stopped:
             break
-        nbox += 1
+        nbox += n_here
         counts[plan.arm] += 1
         cyc_times.append(cyc.T + plan.pause)
         controller.after(box, plan, t)
+        i += n_here
     tr_t.append(t)
     tr_T.append(th.T_w.copy())
     return ShiftResult(controller.name, sc.name, seed, nbox, stopped, t_stop, t, peak_T, energy,

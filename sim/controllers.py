@@ -86,6 +86,56 @@ class RoundRobinEnergy(Controller):
         return Plan(arm, min(ok, key=lambda k: self.loss(box, arm, k)))
 
 
+class AlwaysTwoArm(Controller):
+    """Thermally blind: every box with a two-arm grasp (min-norm posture unless infeasible)."""
+    name = "B6 always two-arm"
+
+    def plan(self, box, t):
+        ok = self.lib.postures_ok(box.pick, box.place, "both", 1.0, box.mass)
+        if not ok:                       # no feasible two-arm posture: fall back to nearest arm
+            arm = nearest_arm(box)
+            return Plan(arm, self.min_norm_or_feasible(box, arm))
+        return Plan("both", 0 if 0 in ok else min(ok, key=lambda k: self.loss(box, "both", k)))
+
+
+class AlwaysDual(Controller):
+    """Thermally blind, maximum throughput: two boxes per cycle, one per arm."""
+    name = "B7 always parallel"
+
+    def plan(self, box, t):
+        nb = self.next_box
+        return Plan("dual", self.min_norm_or_feasible(box, "l"), posture2=self.min_norm_or_feasible(nb, "r"))
+
+
+class ReactiveModeSwitch(Controller):
+    """Reactive heuristic for a robot that can lift in parallel: parallel lifts until any
+    winding reaches T_on, then two-arm lifts until it falls below T_off; above T_slow it also
+    slows to the slowest pace with a pause (commercial-style derating on top)."""
+    name = "B8 reactive switch"
+
+    def __init__(self, T_on=120.0, T_off=110.0, T_slow=130.0, pause=4.0):
+        self.T_on, self.T_off, self.T_slow, self.pause = T_on, T_off, T_slow, pause
+
+    def reset(self, *a):
+        super().reset(*a)
+        self.cool = False
+
+    def plan(self, box, t):
+        hot = self.th.T_w.max()
+        if hot >= self.T_on:
+            self.cool = True
+        elif hot <= self.T_off:
+            self.cool = False
+        pace, pause = (PACES[-1], self.pause) if hot >= self.T_slow else (1.0, 0.0)
+        if self.cool:
+            ok = self.lib.postures_ok(box.pick, box.place, "both", pace, box.mass)
+            if ok:
+                return Plan("both", 0 if 0 in ok else ok[0], pace, pause)
+        nb = self.next_box
+        return Plan("dual", self.min_norm_or_feasible(box, "l", pace), pace, pause,
+                    posture2=self.min_norm_or_feasible(nb, "r", pace))
+
+
 class ReactiveDerate(Controller):
     """Commercial-style protection: past T_on, slow to the slowest pace and add pauses."""
     name = "B4 reactive"
@@ -124,8 +174,12 @@ class ThermalBudget(Controller):
     PAUSES = (0.0, 1.0, 2.0, 4.0, 8.0, 15.0)
 
     def __init__(self, use_arm=True, use_posture=True, use_pace=True, margin_s=60.0,
-                 replan_every=5, forecast_dt=10.0, adapt=True, name="P thermal-budget"):
+                 replan_every=5, forecast_dt=10.0, adapt=True, use_dual=True, lookahead=True,
+                 T_margin=5.0, name="P thermal-budget"):
+        self.lookahead = lookahead
+        self.T_margin = T_margin       # allowance for within-cycle temperature ripple (C)
         self.use_arm, self.use_posture, self.use_pace = use_arm, use_posture, use_pace
+        self.use_dual = use_dual
         self.adapt = adapt
         self.margin = margin_s
         self.replan_every, self.fdt = replan_every, forecast_dt
@@ -184,6 +238,16 @@ class ThermalBudget(Controller):
         self.th.gain[:] = np.clip(g, self.GAIN_MIN, self.GAIN_MAX)
 
     def _steps(self, box, plan):
+        if plan.arm == "dual":
+            nb = self.next_box
+            cyc = self.lib.get(box.pick, box.place, "l", plan.posture, plan.pace)
+            seg = cyc.seg_tau_sq(box.mass)
+            seg[:, 7:14] = self.lib.get(nb.pick, nb.place, "r", plan.posture2,
+                                        plan.pace).seg_tau_sq(nb.mass)[:, 7:14]
+            steps = list(zip(cyc.durations, seg))
+            if plan.pause > 0:
+                steps.append((plan.pause, self.idle))
+            return steps
         cyc = self.lib.get(box.pick, box.place, plan.arm, plan.posture, plan.pace)
         seg = cyc.seg_tau_sq(box.mass)
         if plan.arm in ("l", "r"):
@@ -214,6 +278,11 @@ class ThermalBudget(Controller):
             self.policy = self._choose_policy(box, k, m_fc, remaining)
             self.n_since = 0
         mode, pace, pause = self.policy
+        if mode == "dual":
+            k2 = self._posture(self.next_box, "r", w)
+            if k["l"] is not None and k2 is not None:
+                return Plan("dual", k["l"], pace, pause, posture2=k2)
+            mode = "both"
         if mode == "both" and k["both"] is None:
             mode = "alt"
         if mode == "both":
@@ -226,10 +295,14 @@ class ThermalBudget(Controller):
 
     def _choose_policy(self, box, k, m_fc, remaining):
         lib, idle = self.lib, self.idle
-        modes = ["alt", "both"] if (self.use_arm and k["both"] is not None) else ["alt"]
+        modes = ["alt"]
+        if self.use_arm:
+            modes += (["both"] if k["both"] is not None else []) + (["dual"] if self.use_dual else [])
         paces = PACES if self.use_pace else (1.0,)
         pauses = self.PAUSES if self.use_pace else (0.0,)
-        cands, loads, rates = [], [], []
+        cands, loads, rates, windows = [], [], [], []
+        if "dual" in modes and (k["l"] is None or k["r"] is None):
+            modes = [m for m in modes if m != "dual"]
         for mode in modes:
             for pace in paces:
                 if mode == "alt" and not self.use_arm:
@@ -240,25 +313,78 @@ class ThermalBudget(Controller):
                 elif mode == "alt":
                     El, Tl = self._load(lib.get(box.pick, box.place, "l", k["l"], pace), m_fc, "l")
                     Er, Tr = self._load(lib.get(box.pick, box.place, "r", k["r"], pace), m_fc, "r")
-                    E, T, n = El + Er, Tl + Tr, 2
+                    E, T, n, c = El + Er, Tl + Tr, 2, 2
+                elif mode == "dual":
+                    # both arms lift their own box in the same cycle (this pick slot used for both)
+                    El, T = self._load(lib.get(box.pick, box.place, "l", k["l"], pace), m_fc, "l")
+                    Er, _ = self._load(lib.get(box.pick, box.place, "r", k["r"], pace), m_fc, "r")
+                    E = np.concatenate([El[:7], Er[7:]])
+                    n, c = 2, 1
                 else:
                     E, T = self._load(lib.get(box.pick, box.place, "both", k["both"], pace),
                                       m_fc, "both")
-                    n = 1
+                    n, c = 1, 1
+                if mode == "alt" and not self.use_arm:
+                    c = 1
                 for p in pauses:
-                    Ttot = T + n * p
+                    Ttot = T + c * p
                     cands.append((mode, pace, p))
-                    loads.append((E + n * p * idle) / Ttot)
+                    loads.append((E + c * p * idle) / Ttot)
                     rates.append(n / Ttot)
-        ttl = self.th.forecast_ttl(np.array(loads), horizon=remaining + self.margin, dt=self.fdt)
+                    windows.append(self.replan_every * Ttot / c)   # time this policy is held
+        loads, rates, windows = np.array(loads), np.array(rates), np.array(windows)
+        heat = loads @ self.lib.c
+        H = remaining + self.margin
+        if not self.lookahead:
+            return self._constant_policy(cands, loads, rates, heat, H, remaining)
+        # Two-stage lookahead: hold candidate a for its window, then the best policy that is
+        # safe from the predicted state to the end of the shift. Score = boxes over the
+        # remaining shift. Sprinting is allowed while a safe way to finish still exists.
+        th = self.th
+        Tw0, Th0 = th.T_w.copy(), th.T_h.copy()
+        C = len(cands)
+        sub = 3
+        Tw_a = np.broadcast_to(Tw0, (C, th.n)).copy()
+        Th_a = np.broadcast_to(Th0, (C, th.n)).copy()
+        for _ in range(sub):
+            dt = (windows / sub)[:, None]
+            k1w, k1h = th._deriv(Tw_a, Th_a, loads)
+            k2w, k2h = th._deriv(Tw_a + dt * k1w, Th_a + dt * k1h, loads)
+            Tw_a, Th_a = Tw_a + 0.5 * dt * (k1w + k2w), Th_a + 0.5 * dt * (k1h + k2h)
+        value = np.full(C, -np.inf)
+        # only un-paused actions sprint; paused ones are reached through the fallback
+        for a in np.argsort(-rates):
+            if cands[a][2] > 0:
+                continue
+            if (Tw_a[a] >= th.T_limit - self.T_margin).any():
+                continue
+            rest = remaining - windows[a]
+            if rest <= 0:
+                value[a] = rates[a] * remaining
+                continue
+            th.T_w[:], th.T_h[:] = Tw_a[a], Th_a[a]
+            ttl = th.forecast_ttl(loads, horizon=rest + self.margin, dt=self.fdt,
+                                  margin_C=self.T_margin).min(1)
+            safe = ttl >= rest + self.margin
+            if safe.any():
+                value[a] = rates[a] * windows[a] + rates[safe].max() * rest
+        th.T_w[:], th.T_h[:] = Tw0, Th0
+        if np.isfinite(value).any():
+            best = value.max()
+            tied = value >= best - 1e-6 * max(best, 1.0)
+            return cands[int(np.argmin(np.where(tied, heat, np.inf)))]
+        return self._constant_policy(cands, loads, rates, heat, H, remaining)
+
+    def _constant_policy(self, cands, loads, rates, heat, H, remaining):
+        """Fastest policy that, held to the end of the shift, keeps every winding safe."""
+        ttl = self.th.forecast_ttl(loads, horizon=H, dt=self.fdt, margin_C=self.T_margin)
         budget = ttl.min(1)
-        rates = np.array(rates)
-        ok = budget >= remaining + self.margin
+        ok = budget >= H
         if ok.any():
-            idx = int(np.argmax(np.where(ok, rates, -1)))       # fastest safe policy
-        else:
-            idx = int(np.argmax(budget))                         # survive as long as possible
-        return cands[idx]
+            best = rates[ok].max()
+            tied = ok & (rates >= best * (1 - 1e-9))
+            return cands[int(np.argmin(np.where(tied, heat, np.inf)))]
+        return cands[int(np.argmax(budget))]
 
     def _pick_arm(self, box, k, pace, m_fc, remaining):
         """Arm whose hottest joint has more forecast budget if it took this pick repeatedly."""
@@ -277,4 +403,5 @@ class ThermalBudget(Controller):
 
 
 def all_controllers():
-    return [DominantArm(), RoundRobin(), EnergyOptimal(), ReactiveDerate(), ThermalBudget()]
+    return [DominantArm(), RoundRobin(), EnergyOptimal(), ReactiveDerate(), RoundRobinEnergy(),
+            AlwaysTwoArm(), AlwaysDual(), ReactiveModeSwitch(), ThermalBudget()]

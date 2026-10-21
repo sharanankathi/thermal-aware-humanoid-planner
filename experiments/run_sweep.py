@@ -1,5 +1,5 @@
 """Experiment sweeps. Usage:
-    python experiments/run_sweep.py main        # 6 scenarios x 20 seeds x 5 controllers
+    python experiments/run_sweep.py main        # 6 scenarios x 20 seeds x 8 controllers
     python experiments/run_sweep.py ablation    # levers alone + forecast horizon margin
     python experiments/run_sweep.py paramerr    # plant params +/-30% (random per seed)
 Results: results/<name>.csv, plus seed-0 temperature traces in results/traces_<name>.pkl
@@ -21,7 +21,8 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("MENAGERIE_PATH", str(Path.home() / "mujoco_menagerie"))
 
 from sim.controllers import (DominantArm, EnergyOptimal, ReactiveDerate, RoundRobin,  # noqa: E402
-                             RoundRobinEnergy, ThermalBudget)
+                             RoundRobinEnergy, ThermalBudget, AlwaysTwoArm,
+                             AlwaysDual, ReactiveModeSwitch)
 from sim.cycles import CycleLibrary  # noqa: E402
 from sim.robot import JOINT_NAMES, Robot  # noqa: E402
 from sim.shift import SCENARIOS, joint_params, loss_coeff, run_shift  # noqa: E402
@@ -29,7 +30,12 @@ from sim.shift import SCENARIOS, joint_params, loss_coeff, run_shift  # noqa: E4
 SEEDS = range(20)
 CTRL = {
     "B1": DominantArm, "B2": RoundRobin, "B3": EnergyOptimal, "B4": ReactiveDerate,
-    "B5": RoundRobinEnergy, "P": ThermalBudget,
+    "B5": RoundRobinEnergy, "B6": AlwaysTwoArm, "B7": AlwaysDual,
+    "B8": ReactiveModeSwitch,                                              # 120 / 110 C
+    "B8-130": lambda: ReactiveModeSwitch(130.0, 120.0, 135.0),             # tuned hotter
+    "B8-135": lambda: ReactiveModeSwitch(135.0, 125.0, 138.0),             # as hot as P runs
+    "P": ThermalBudget,
+    "P-nolook": lambda: ThermalBudget(lookahead=False, name="P no lookahead"),
     "P-arm": lambda: ThermalBudget(use_posture=False, use_pace=False, name="P arm only"),
     "P-ik": lambda: ThermalBudget(use_arm=False, use_pace=False, name="P IK only"),
     "P-pace": lambda: ThermalBudget(use_arm=False, use_posture=False, name="P pace only"),
@@ -83,6 +89,7 @@ def _job(args):
                hottest=JOINT_NAMES[int(np.argmax(res.peak_T))],
                T_spread=float(res.peak_T.max() - res.peak_T[[2, 3, 9, 10]].min()),
                n_l=res.arm_counts["l"], n_r=res.arm_counts["r"], n_both=res.arm_counts["both"],
+               n_dual=res.arm_counts.get("dual", 0),
                peak_tau_ratio=res.peak_torque_ratio, wall_s=time.time() - t0)
     if perturb:
         row.update({f"f_{k}": v for k, v in _perturbed(seed).items()})
@@ -91,31 +98,25 @@ def _job(args):
 
 
 def main(which: str):
+    HEAVY = ("heavy_high", "warm_heavy", "conveyor_r", "warm_start")
+    BASE = ("B2", "B4", "B6", "B7", "B8", "B8-130", "B8-135")
     if which == "main":
-        jobs = [(c, s, k, False) for s in SCENARIOS for c in ("B1", "B2", "B3", "B4", "B5", "P")
-                for k in SEEDS]
-    elif which == "paramerr_p":     # proposed controller only (after adding online correction)
-        jobs = [("P", s, k, True) for s in ("heavy_high", "warm_heavy", "conveyor_r", "warm_start")
-                for k in SEEDS]
-    elif which == "ablation_pace":
-        jobs = [("P-pace", s, k, False) for s in ("warm_heavy", "conveyor_r", "warm_start")
+        jobs = [(c, s, k, False) for s in SCENARIOS for c in BASE + ("P",) for k in SEEDS]
+    elif which == "paramerr":
+        jobs = [(c, s, k, True) for s in HEAVY
+                for c in ("B6", "B8", "B8-130", "B8-135", "P", "P-noadapt") for k in SEEDS]
+    elif which == "ablation":
+        jobs = [(c, s, k, False) for s in ("warm_heavy", "conveyor_r", "warm_start")
+                for c in ("P-nolook", "P-arm", "P-ik", "P-pace", "P-nomargin", "P-margin10")
                 for k in range(10)]
     elif which == "sensitivity":
         jobs = [(c, s, k, False, v) for v in VARIANTS for s in ("warm_heavy", "conveyor_r")
-                for c in ("B2", "B4", "B5", "P") for k in range(10)]
-    elif which == "b5":
-        jobs = [("B5", s, k, False) for s in SCENARIOS for k in SEEDS]
-    elif which == "ablation":
-        jobs = [(c, s, k, False) for s in ("warm_heavy", "conveyor_r", "warm_start")
-                for c in ("P-arm", "P-ik", "P-pace", "P-nomargin", "P-margin10")
-                for k in range(10)]
-    elif which == "paramerr":
-        jobs = [(c, s, k, True) for s in ("heavy_high", "warm_heavy", "conveyor_r", "warm_start")
-                for c in ("B2", "B4", "B5", "P") for k in SEEDS]
+                for c in ("B6", "B8", "B8-135", "P") for k in range(10)]
     else:
         raise SystemExit(__doc__)
     # slow jobs first so the pool stays busy
     jobs.sort(key=lambda j: not j[0].startswith("P"))
+    print(f"{which}: {len(jobs)} runs on {os.cpu_count()} cores", flush=True)
     out = ROOT / "results"
     out.mkdir(exist_ok=True)
     rows, traces = [], {}

@@ -238,17 +238,19 @@ class JointThermalModel:
             Tw = Tw_new
         return out
 
-    def forecast_ttl(self, tau_sq, horizon: float, dt: float = 5.0) -> np.ndarray:
+    def forecast_ttl(self, tau_sq, horizon: float, dt: float = 5.0, margin_C: float = 0.0
+                     ) -> np.ndarray:
         """Batch forecast: tau_sq (C, n) candidate loads -> (C, n) seconds to T_limit.
 
         Every candidate starts from the current state and holds its mean tau^2.
         np.inf means the joint stays below the limit for the whole horizon.
         """
+        lim = self.T_limit - margin_C
         tau_sq = np.atleast_2d(np.asarray(tau_sq, float))
         C = tau_sq.shape[0]
         Tw = np.broadcast_to(self.T_w, (C, self.n)).copy()
         Th = np.broadcast_to(self.T_h, (C, self.n)).copy()
-        out = np.where(Tw >= self.T_limit, 0.0, np.inf)
+        out = np.where(Tw >= lim, 0.0, np.inf)
         # Exact shortcut. The two-node network is a cooperative (monotone) system: if the
         # state starts at or below the steady state for this load, it stays below it. So a
         # joint whose steady winding temperature is under the limit, and which starts below
@@ -258,7 +260,7 @@ class JointThermalModel:
         for _ in range(60):
             Tss = self.T_amb + Rt * self.power(np.minimum(Tss, 1e3), tau_sq)
         Thss = self.T_amb + self._Rha * self.power(np.minimum(Tss, 1e3), tau_sq)
-        safe = (Tss < self.T_limit) & (Tw <= Tss + 1e-9) & (Th <= Thss + 1e-9)
+        safe = (Tss < lim) & (Tw <= Tss + 1e-9) & (Th <= Thss + 1e-9)
         live = ~safe & np.isinf(out)
         rows = np.where(live.any(1))[0]
         if rows.size == 0:
@@ -271,9 +273,9 @@ class JointThermalModel:
             k2w, k2h = self._deriv(Tw + dt * k1w, Th + dt * k1h, tau_sq)
             Tw_new = Tw + 0.5 * dt * (k1w + k2w)
             Th = Th + 0.5 * dt * (k1h + k2h)
-            hit = np.isinf(sub) & (Tw_new >= self.T_limit)
+            hit = np.isinf(sub) & (Tw_new >= lim)
             if hit.any():
-                frac = (self.T_limit - Tw) / np.maximum(Tw_new - Tw, 1e-12)
+                frac = (lim - Tw) / np.maximum(Tw_new - Tw, 1e-12)
                 sub = np.where(hit, t + frac * dt, sub)
             Tw = Tw_new
             t += dt

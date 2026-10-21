@@ -6,3 +6,7 @@ __pycache__/
 figures/frames/
 results/broken_posture_lib/
 .venv/
+paper/pg-*.png
+paper/zoom-*.png
+paper/paper_html.md
+figures/reel/
