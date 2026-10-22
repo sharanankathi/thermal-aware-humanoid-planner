@@ -2,13 +2,15 @@
 
 ![Apollo placing a box on the high shelf](figures/hero.png)
 
-**In a 35 °C room, the planner sustains full throughput for a 2-hour box-loading shift: 41% more boxes than reactive thermal derating (20 runs). With motor parameters off by up to ±30%, it hits a protective stop in 1 of 20 runs versus 4–9 for every baseline.**
+**Status (Oct 2026): simulation study, results being written up.** A two-armed humanoid (Apptronik Apollo, 14 arm joints with datasheet-validated thermal models) loads boxes for 2-hour shifts. Main findings so far (20 runs per scenario):
 
-Side-by-side replay: [figures/replay_warm_heavy.mp4](figures/replay_warm_heavy.mp4)
+- **Limb allocation is the thermal lever.** Switching between parallel single-arm lifts and two-arm lifts based on motor temperature raises throughput 16–25% over always lifting with both arms.
+- **Arm posture barely matters:** the best posture saves at most 5% of heat in the most-loaded joint.
+- **Forecasting doesn't beat a tuned reactive rule.** A forecast-based thermal planner matched, but did not beat, a simple temperature-triggered switch, and was less robust to ±30% motor-parameter error (2–5 vs 0–1 protective stops in 20 runs).
 
-A planner that forecasts each joint's winding temperature over a long repetitive bimanual task, and chooses arm, IK posture and pace to maximize throughput before any joint hits its limit.
+An earlier version of this README reported the planner beating reactive derating by 41%. That comparison lacked a two-arm baseline; with it, the claim does not hold.
 
-Simulation study on Apptronik Apollo (MuJoCo Menagerie), upper body on a fixed base. All Python, runs on a laptop CPU.
+A planner that forecasts each joint's winding temperature over a long repetitive bimanual task, plus reactive and fixed-rule baselines, all in one reproducible pipeline. Simulation only: Apptronik Apollo (MuJoCo Menagerie), upper body on a fixed base. All Python, runs on a laptop CPU.
 
 ## Quick start
 ```bash
@@ -27,7 +29,7 @@ python experiments/run_sweep.py sensitivity  # provisional thermal parameters va
 ```
 The first run builds the IK posture library and cycle-torque cache (~1 min), stored in `.cache/`.
 
-**Results:** see [docs/results_summary.md](docs/results_summary.md).
+**Results:** `results/` (v2, current) and `results/v1/` (superseded first version). Notes: [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ## Pipeline
 ```
