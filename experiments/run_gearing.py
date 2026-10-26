@@ -2,6 +2,7 @@
 Usage:
     python experiments/run_gearing.py shift2h    # 2 h shifts: base vs fixed vs two-speed (x eta)
     python experiments/run_gearing.py shift8h    # 8 h shifts: gearing vs coolant loop + radiator
+    python experiments/run_gearing.py ratio      # throughput vs uniform ratio multiplier (capped at speed)
 Results: results/gearing/<name>.csv. Work policy: reactive 130 C limb switch (B8-130).
 
 Gearing variants (sim/gearing.py):
@@ -48,7 +49,7 @@ def _init():
             qmax = np.maximum(qmax, np.abs(_kinematics(c)[0]).max(axis=(0, 1)))
     head = OMEGA_MAX / (N0 * qmax)
     fixed = np.minimum(np.floor(head * 0.98 * 100) / 100, 2.0)
-    _G.update(r=r, P=P, lib=lib, fixed=fixed, cache={})
+    _G.update(r=r, P=P, lib=lib, fixed=fixed, head=head, N0=N0, cache={})
 
 
 def library(variant, eta_hi):
@@ -59,6 +60,10 @@ def library(variant, eta_hi):
             L, _ = regear_library(lib, r, P, np.ones(14), "fixed")
         elif variant == "fixed":
             L, _ = regear_library(lib, r, P, _G["fixed"], "fixed", eta_hi=eta_hi)
+        elif variant.startswith("ratio_"):
+            u = float(variant.split("_")[1])
+            m = np.minimum(u, np.floor(_G["head"] * 0.98 * 100) / 100)
+            L, _ = regear_library(lib, r, P, m, "fixed", eta_hi=eta_hi)
         elif variant.startswith("twospeed_"):
             k = float(variant.split("_")[1])
             L, _ = regear_library(lib, r, P, np.full(14, k), "twospeed", eta_hi=eta_hi)
@@ -88,6 +93,25 @@ def _job(args):
                 wall_s=round(time.time() - t0, 1))
 
 
+def write_ratio_table():
+    """Per-joint ratios and joint-side reflected rotor inertia (N^2 J_m) for each variant."""
+    _init()
+    from sim.gearing import J_M
+    r, N0, head, fixed = _G["r"], _G["N0"], _G["head"], _G["fixed"]
+    arm = np.array([r.model.dof_armature[r.dadr[i]] for i in range(14)])
+    out = ROOT / "results/gearing/ratios.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["joint", "N0", "speed_headroom", "fixed_mult", "N_fixed", "N_twospeed2_high",
+                    "apollo_armature_kgm2", "J_refl_N0_kgm2", "J_refl_fixed_kgm2", "J_refl_2x_kgm2"])
+        for i in range(7):
+            w.writerow([JOINT_NAMES[i][2:], N0[i], round(head[i], 2), fixed[i], round(N0[i] * fixed[i], 1),
+                        2 * N0[i], round(arm[i], 4), round(N0[i] ** 2 * J_M, 4),
+                        round((N0[i] * fixed[i]) ** 2 * J_M, 4), round((2 * N0[i]) ** 2 * J_M, 4)])
+    print(f"wrote {out}")
+
+
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "shift2h"
     if which == "shift2h":
@@ -99,6 +123,11 @@ def main():
         variants = [("base", None), ("fixed", None), ("fixed", 0.7)]
         jobs = [(which, v, e, c, s, sd) for s in ("heavy_high", "warm_heavy", "hot_heavy")
                 for v, e in variants for c in ("air", "radiator") for sd in range(3)]
+    elif which == "ratio":
+        variants = [(f"ratio_{u}", e) for u in (0.75, 1.0, 1.25, 1.5, 1.75, 2.0) for e in (None, 0.7)]
+        jobs = [("shift2h", v, e, "air", s, sd) for s in ("heavy_high", "warm_heavy")
+                for v, e in variants for sd in range(5)]
+        write_ratio_table()
     else:
         raise SystemExit(f"unknown experiment {which}")
     out = ROOT / "results/gearing" / f"{which}.csv"
