@@ -1,0 +1,58 @@
+# Cooling hardware and service logistics for the swappable-cartridge study.
+# Tags: [datasheet] [published] [physics] [ASSUMPTION] (swept in experiments) [PROVISIONAL]
+#
+# Architecture: cold plates on the 8 high-duty arm joints (shoulder x3, elbow, both arms)
+# -> one well-mixed water-glycol loop in the torso -> heat sink(s):
+#    radiator (to ambient)  and/or  PCM cartridge (enthalpy store, swapped or re-frozen at a dock).
+# The air path of every joint (R_ha, from the motor datasheet) is kept in parallel.
+
+loop:
+  plumbed_joints: [shoulder_aa, shoulder_ie, shoulder_fe, elbow_fe]  # both arms
+  R_coldplate_K_per_W: 0.5     # [ASSUMPTION] housing -> coolant, small liquid jacket; sweep 0.25-1.0
+  coolant_mass_kg: 0.5         # [ASSUMPTION] loop + cold-plate water-glycol inventory
+  coolant_cp: 3600.0           # [physics] 30% propylene glycol/water, ~25-60 C
+  hardware_mass_kg: 1.2        # [ASSUMPTION] pump, 8 cold plates, hoses; common to all loop options
+                               #   (reported, not charged, since every loop option carries it)
+
+radiator:
+  UA_per_kg_W_per_K: 15.0      # [ASSUMPTION] compact radiator + fans, assembled mass. PC-grade
+                               #   240 mm units reach ~25 W/K/kg with unobstructed airflow; a torso
+                               #   intake is restricted. Swept 5-30.
+
+cartridge:
+  pcm_mass_fraction: 0.65      # [ASSUMPTION] of packaged mass (research: housing/HX/fittings +30-50%)
+  hx_al_mass_fraction: 0.15    # [ASSUMPTION] aluminum fins/channels inside (sensible capacity)
+  al_cp: 900.0                 # [physics]
+  UA_hx_W_per_K_per_kg: 30.0   # [ASSUMPTION] coolant-side conductance per kg packaged (2 kg -> 60 W/K;
+                               #   research estimate UA ~ 50 W/K). Swept.
+  fin_gap_m: 0.006             # [ASSUMPTION] PCM layer between fins; melt front travels gap/2
+  R_interface_K_per_W: 0.0     # 0 = dry-break fluid coupling (HX inside cartridge).
+                               #   Contact variants from Yovanovich 1997: TIM 100 cm2 ~0.006,
+                               #   TIM 10 cm2 ~0.03, bare Al 10 cm2 ~0.2-1.0. Swept.
+  T_fresh_C: 20.0              # [ASSUMPTION] cartridge temperature when issued from the rack
+  pcm:                         # paraffin/expanded-graphite composite
+    name: RT44HC + 15 wt% EG
+    T_solidus_C: 41.0          # [datasheet] RT44HC melting range 41-44 C
+    T_liquidus_C: 44.0         # [datasheet]
+    latent_J_per_kg: 187000.0  # [datasheet x composite] ~220 kJ/kg latent in RT44HC (250 kJ/kg storage
+                               #   over 35-50 C minus ~30 kJ/kg sensible) x 0.85 paraffin fraction
+    cp_solid: 1900.0           # [PROVISIONAL] composite, paraffin 2000 x 0.85 + graphite 710 x 0.15
+    cp_liquid: 1900.0
+    k_W_per_mK: 5.0            # [published] PA + 15-20 wt% EG: 5.3-5.8 W/m K
+    density_kg_per_m3: 800.0   # [datasheet] solid
+
+dock:
+  T_chill_C: 10.0              # [ASSUMPTION] dock chilled water
+  UA_dock_W_per_K: 200.0       # [ASSUMPTION] chilled water pushed through the robot loop at a dock
+  chiller_COP: 3.0             # [ASSUMPTION] research report value
+
+logistics:                     # two archetypes, both from published specs
+  charge_dock:                 # Agility Digit 5 press release (Sept 2026): 90 min run, 9 min charge
+    run_min: 90.0
+    dwell_min: 9.0
+  battery_swap:                # Boston Dynamics production Atlas: swap in < 3 min
+    run_min: 120.0
+    dwell_min: 3.0
+  travel_s: 45.0               # [ASSUMPTION] one way, work cell <-> dock
+  cartridge_swap_s: 60.0       # [ASSUMPTION] latch + two dry-break couplings; swept 20-180
+  shift_h: 8.0
