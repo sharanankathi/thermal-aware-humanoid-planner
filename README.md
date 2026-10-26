@@ -12,6 +12,30 @@ An earlier version of this README reported the planner beating reactive derating
 
 A planner that forecasts each joint's winding temperature over a long repetitive bimanual task, plus reactive and fixed-rule baselines, all in one reproducible pipeline. Simulation only: Apptronik Apollo (MuJoCo Menagerie), upper body on a fixed base. All Python, runs on a laptop CPU.
 
+## Follow-up study (Oct 2026): should a humanoid swap heat like it swaps batteries?
+
+Paper draft: [paper/paper_cartridge.md](paper/paper_cartridge.md). The same 14-joint model, plus cold plates on the 8 shoulder/elbow joints, a torso coolant loop, a radiator, and a phase-change (PCM) cartridge that is re-frozen at the charging dock or swapped. 795 eight-hour shifts, heavy boxes, 25–40 °C rooms.
+
+- **The coolant loop is the big step:** +32–33% boxes over air cooling with no heat sink at all; a 2 kg radiator takes it to +52–54%.
+- **Swappable cartridges never beat the radiator.** A cartridge colder than the room makes the robot 3–5% faster while it works, but swap trips cost more than that; with a 15 s round trip it only ties.
+- **The narrow part of the heat path is inside the motor.** Halving winding-to-housing resistance lets the loop alone reach 100% of no-temperature-limit throughput at 25 °C and 95% at 40 °C; any sink then adds ≤0.1%.
+
+```bash
+python experiments/run_cartridge.py melt        # options x melt temp x room temp (345 shifts)
+python experiments/run_cartridge.py crossover   # swap trip time x radiator strength (207)
+python experiments/run_cartridge.py joint       # better joint heat path (243)
+python experiments/make_figures_cartridge.py    # figures/cart_fig*.png, results/cartridge/tables.md
+pytest -q tests/test_pcm.py                     # PCM model vs finite volume vs Neumann; energy balance
+```
+
+| Path | What |
+|---|---|
+| `thermal/pcm.py` | Lumped enthalpy cartridge model; 1D finite-volume and Neumann references |
+| `thermal/loop.py` | 14 joints + cold plates + coolant loop + radiator (bypass) + cartridge + dock chiller |
+| `sim/service.py` | 8 h shift with battery service and cartridge logistics (air / loop / radiator / in-place / swap / co-swap / smart) |
+| `params/cooling.yaml` | Every cooling and logistics parameter with its source or `[ASSUMPTION]` tag |
+| `results/cartridge/` | Sweep CSVs and generated tables |
+
 ## Quick start
 ```bash
 pip install -r requirements.txt
