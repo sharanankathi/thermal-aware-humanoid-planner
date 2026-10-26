@@ -1,0 +1,5 @@
+option,T_melt,scenario,T_amb,seed,boxes,stopped,peak_T,frac_two_arm,n_trips,n_swaps,trip_min,batt_min,sat_min,copper_Wh,coldplate_Wh,radiator_Wh,cartridge_Wh,dock_Wh,chiller_Wh,wall_s
+air,,hot_heavy,40.0,0,5189,0,133.13,0.9338,0,0,0.0,42.0,0.0,824.6,0.0,0.0,0.0,0.0,0.0,1.9
+inplace2,18,hot_heavy,40.0,0,7916,0,132.47,0.3735,0,0,0.0,42.0,358.45,1599.0,715.3,0.0,109.1,593.0,593.0,3.2
+loop,,hot_heavy,40.0,0,6910,0,132.83,0.5802,0,0,0.0,42.0,0.0,1356.8,16.7,0.0,0.0,0.0,0.0,2.1
+radiator2,,hot_heavy,40.0,0,8023,0,131.73,0.3516,0,0,0.0,42.0,0.0,1640.6,751.8,750.2,0.0,0.0,0.0,2.1

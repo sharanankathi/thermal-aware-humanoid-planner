@@ -37,6 +37,7 @@ class Logistics:
     swap_s: float = 60.0         # cartridge exchange
     shift_h: float = 8.0
     T_fresh: float = 20.0        # issued cartridge temperature
+    thermal_trip_s: float | None = None  # round-trip time of a cartridge trip (None: 2*travel + swap)
 
 
 @dataclass
@@ -116,7 +117,8 @@ def run_service_shift(lib, controller, sc: Scenario, seed: int, opt: ThermalOpti
     tr = {"t": [], "Tmax": [], "Tc": [], "f": [], "mode": []} if record else None
     next_rec = 0.0
     rho = opt.breakeven_rho
-    t_trip_cost = 2 * lg.travel_s + lg.swap_s
+    t_trip_cost = (lg.thermal_trip_s if lg.thermal_trip_s is not None
+                   else 2 * lg.travel_s + lg.swap_s)
 
     def advance(tsq, dt):
         nonlocal t, peak, stopped, t_stop, sat_s, next_rec
@@ -181,10 +183,14 @@ def run_service_shift(lib, controller, sc: Scenario, seed: int, opt: ThermalOpti
                 go = (next_batt - t) * rho > t_trip_cost
             if go:
                 t0 = t
-                idle_for(lg.travel_s)
-                idle_for(lg.swap_s)
-                do_swap(t)
-                idle_for(lg.travel_s)
+                if lg.thermal_trip_s is not None:   # swap point near the work cell
+                    idle_for(lg.thermal_trip_s)
+                    do_swap(t)
+                else:
+                    idle_for(lg.travel_s)
+                    idle_for(lg.swap_s)
+                    do_swap(t)
+                    idle_for(lg.travel_s)
                 trip_s += t - t0
                 n_trips += 1
                 continue
