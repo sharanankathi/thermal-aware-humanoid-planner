@@ -2,6 +2,7 @@
     python experiments/run_cartridge.py melt            # options x melt temp x 3 ambients x 5 seeds
     python experiments/run_cartridge.py melt --quick    # 1 seed, 1 scenario (smoke test)
     python experiments/run_cartridge.py crossover       # cartridge trip time x radiator strength x ambient
+    python experiments/run_cartridge.py joint           # better joint heat path: does the sink start to matter?
 Results: results/cartridge/<name>.csv
 Work policy is fixed to B8-130 (reactive limb switch); only cooling hardware/logistics vary.
 """
@@ -71,6 +72,41 @@ def crossover_jobs():
     return out
 
 
+# Joint heat path variants: housing->coolant cold plate R_cp (K/W) and winding->housing R_wh scale
+# (potted / directly cooled stator). Nominal path is R_wh 1.24 + R_cp 0.5 = 1.74 K/W per plumbed joint.
+JOINT_PATHS = {
+    "nominal":        (0.5, 1.0),   # 1.74 K/W
+    "coldplate0.1":   (0.1, 1.0),   # 1.34 K/W
+    "coldplate0.1+potted": (0.1, 0.5),  # 0.72 K/W
+}
+
+
+def joint_jobs():
+    out = []
+    for jp, (rcp, rwh) in JOINT_PATHS.items():
+        x = lambda **k: {"joint_path": jp, **k}
+        ov18 = {"T_melt": 18}
+        out += [
+            ("loop", None, ThermalOption("loop", R_cp=rcp), Logistics(), x(trip_s=""), rwh),
+            ("radiator2", None, ThermalOption("radiator", radiator_kg=2, R_cp=rcp), Logistics(), x(trip_s=""), rwh),
+            ("radiator2_weak", None, ThermalOption("radiator", radiator_kg=2, R_cp=rcp, ua_rad_per_kg=5.0),
+             Logistics(), x(trip_s=""), rwh),
+            ("inplace2", 44, ThermalOption("inplace", cartridge_kg=2, R_cp=rcp, cart_override={"T_melt": 44}),
+             Logistics(), x(trip_s=""), rwh),
+            ("coswap2", 18, ThermalOption("coswap", cartridge_kg=2, R_cp=rcp, cart_override=ov18),
+             Logistics(), x(trip_s=""), rwh),
+            ("swap2", 18, ThermalOption("swap", cartridge_kg=2, R_cp=rcp, cart_override=ov18),
+             Logistics(thermal_trip_s=15.0), x(trip_s=15), rwh),
+            ("swap2", 18, ThermalOption("swap", cartridge_kg=2, R_cp=rcp, cart_override=ov18),
+             Logistics(thermal_trip_s=60.0), x(trip_s=60), rwh),
+            ("smart2", 18, ThermalOption("smart", cartridge_kg=2, R_cp=rcp, cart_override=ov18),
+             Logistics(thermal_trip_s=60.0), x(trip_s=60), rwh),
+            ("hybrid1+1", 18, ThermalOption("smart", radiator_kg=1, cartridge_kg=1, R_cp=rcp, cart_override=ov18),
+             Logistics(thermal_trip_s=60.0), x(trip_s=60), rwh),
+        ]
+    return out
+
+
 _LIB = None
 
 
@@ -82,8 +118,11 @@ def _init():
 def _job(args):
     name, Tm, opt, scn, seed = args[:5]
     lg, extra = (args[5], args[6]) if len(args) > 5 else (Logistics(), {})
+    rwh = args[7] if len(args) > 7 else 1.0
+    params = joint_params(scale={"R_wh": rwh}) if rwh != 1.0 else None
     t0 = time.time()
-    r = run_service_shift(_LIB, ReactiveModeSwitch(130.0, 120.0, 135.0), SCEN[scn], seed, opt, lg)
+    r = run_service_shift(_LIB, ReactiveModeSwitch(130.0, 120.0, 135.0), SCEN[scn], seed, opt, lg,
+                          params=params)
     E = r.energy
     return dict(option=name, T_melt=Tm if Tm is not None else "", **extra, scenario=scn,
                 T_amb=SCEN[scn].T_amb, seed=seed, boxes=r.boxes, stopped=int(r.stopped),
@@ -99,12 +138,16 @@ def _job(args):
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "melt"
     quick = "--quick" in sys.argv
-    assert which in ("melt", "crossover"), which
+    assert which in ("melt", "crossover", "joint"), which
     scns = ["hot_heavy"] if quick else list(SCEN)
     if which == "melt":
         seeds = range(1) if quick else range(5)
         opts = melt_options()[:4] if quick else melt_options()
         jobs = [(n, Tm, o, s, sd) for s in scns for (n, Tm, o) in opts for sd in seeds]
+    elif which == "joint":
+        seeds = range(1) if quick else range(3)
+        jj = joint_jobs()[-9:][:4] if quick else joint_jobs()
+        jobs = [(n, Tm, o, s, sd, lg, x, rwh) for s in scns for (n, Tm, o, lg, x, rwh) in jj for sd in seeds]
     else:
         seeds = range(1) if quick else range(3)
         cj = crossover_jobs()[:4] if quick else crossover_jobs()
@@ -118,7 +161,8 @@ def main():
             rows.append(row)
             if i % 10 == 0 or i == len(jobs):
                 print(f"  {i}/{len(jobs)}  {time.time() - t0:.0f}s", flush=True)
-    rows.sort(key=lambda r: (r["scenario"], r["option"], str(r["T_melt"]), str(r.get("trip_s", "")),
+    rows.sort(key=lambda r: (r["scenario"], str(r.get("joint_path", "")), r["option"], str(r["T_melt"]),
+                             str(r.get("trip_s", "")),
                              str(r.get("rad_UA_per_kg", "")), r["seed"]))
     with out.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
