@@ -41,10 +41,25 @@ liner, stator-housing contact, end-turn air and epoxy paths. Copper mass comes o
   A teardown photo or a manufacturer cross-section would remove most of the band.
 
 ## What it means for the earlier results
-`experiments/run_split.py` reruns the key comparisons (air, sinkless loop, radiator, in-place
-refreeze, best cartridge swap, re-gearing) at the assumed 35% split, the physics 25% split, and the
-potted 14% split. First check (40 °C room, loop + 2 kg radiator, 8 h): 8,023 boxes at 35%, 8,084 at
-25%, 8,811 potted (+10%).
+`experiments/run_split.py` reruns the key comparisons at the assumed 35% split, the physics 25% split,
+and the potted 14% split (results/split/split.csv; 108 eight-hour shifts, 2 seeds, no protective stops).
+Boxes per 8 h shift, heavy boxes, 40 °C room (25 and 35 °C rank the same way):
+
+| Option | Assumed 35% | Physics 25% | Potted 14% |
+|---|---|---|---|
+| Air only | 5,191 | 5,223 | 5,728 |
+| Coolant loop, no sink | 6,904 | 7,413 | 8,584 |
+| Loop + 2 kg radiator | 8,027 | 8,088 | 8,813 |
+| Loop + PCM re-frozen at dock | 8,030 | 8,088 | 8,813 |
+| Loop + PCM swapped, 15 s trip | 8,024 | 8,077 | 8,783 |
+| Re-geared, air only | 9,714 | 9,734 | 9,734 |
+
+- **Every conclusion survives the corrected split.** The ranking is unchanged in all three rooms:
+  swapping never beats the radiator, and re-gearing stays at or near the no-limit ceiling.
+- **At the physics split, the sinkless loop gains most (+7%)**: with less resistance inside the motor,
+  the cold plates do more. The radiator moves under 1%.
+- **Potting adds 9–10% on top of air or a radiator** and lets the sinkless loop reach 99% of the
+  ceiling at 25 °C (9,675 of 9,734).
 
 ## Limitations
 - An estimate from assumed internal geometry, not a measurement; the band reflects only the swept inputs.
