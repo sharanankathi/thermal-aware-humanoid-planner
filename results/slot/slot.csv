@@ -1,0 +1,5 @@
+case,R_wh_nominal,R_wh_p5,R_wh_median,R_wh_p95,share_of_TPR_median
+air,2.832,1.262,2.719,5.773,0.766
+varnish,0.833,0.549,0.892,1.594,0.251
+epoxy,0.446,0.355,0.497,0.708,0.14
+potting_cut_vs_varnish,0.465,0.306,0.444,0.591,
